@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-linux-gnu
+            label: x86_64-linux
+            os: ubuntu-latest
+          - target: aarch64-linux-gnu
+            label: aarch64-linux
+            os: ubuntu-latest
+          - target: x86_64-macos-none
+            label: x86_64-macos
+            os: macos-latest
+          - target: aarch64-macos-none
+            label: aarch64-macos
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build --release=fast -Dtarget=${{ matrix.target }}
+
+      - name: Package
+        run: |
+          ARCHIVE="amux-${{ github.ref_name }}-${{ matrix.label }}.tar.gz"
+          tar -czf "$ARCHIVE" -C zig-out/bin amux
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amux-${{ matrix.label }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            amux-*.tar.gz
