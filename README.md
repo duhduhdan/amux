@@ -39,19 +39,17 @@ set -g @plugin 'duhduhdan/amux'
 
 Press `prefix + I` to install. The plugin auto-builds the Zig binary on first load.
 
-### Pre-built binaries
+### Pre-built binaries (no Zig required)
 
-Download from [Releases](https://github.com/duhduhdan/amux/releases) and extract to the plugin directory:
-
-```sh
-mkdir -p ~/.tmux/plugins/amux/zig-out/bin
-tar -xzf amux-v*.tar.gz -C ~/.tmux/plugins/amux/zig-out/bin
-```
-
-Then clone the repo for the shell scripts:
+Clone the repo and download a pre-built binary instead of building from source:
 
 ```sh
 git clone https://github.com/duhduhdan/amux ~/.tmux/plugins/amux
+cd ~/.tmux/plugins/amux
+# Download the binary for your platform from:
+# https://github.com/duhduhdan/amux/releases
+mkdir -p zig-out/bin
+tar -xzf amux-v*.tar.gz -C zig-out/bin
 ```
 
 Add to your `tmux.conf`:
@@ -60,7 +58,7 @@ Add to your `tmux.conf`:
 run-shell ~/.tmux/plugins/amux/amux.tmux
 ```
 
-### Manual (build from source)
+### Build from source
 
 ```sh
 git clone https://github.com/duhduhdan/amux ~/.tmux/plugins/amux
