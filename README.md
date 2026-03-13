@@ -8,7 +8,7 @@ Written in Zig with [libvaxis](https://github.com/rockorager/libvaxis). Installa
 ┌─ ⊞ amux  ─────────────┐
 │ ●  dotfiles          3│
 │    ~/dev/dotfiles     │
-│    opencode          2│
+│ ✸  opencode          2│
 │    website           4│
 │ ○  api-server        2│
 │    docs              1│
@@ -19,6 +19,7 @@ Written in Zig with [libvaxis](https://github.com/rockorager/libvaxis). Installa
 ```
 
 - `●` current session
+- `✸` agent waiting for input (accent color, requires [integration](#agent-integrations))
 - `○` another client attached
 
 ## Requirements
@@ -109,6 +110,84 @@ set-option -g @amux-width "30"
 set-option -g @amux-position "left"
 ```
 
+## Agent Integrations
+
+amux can show when an AI agent is idle and waiting for your input. A `✸` indicator appears in accent color next to the session name when the agent is done.
+
+This works via a simple file-based signal protocol. Integrations for Claude Code and OpenCode are included. Any tool that writes `$XDG_RUNTIME_DIR/amux/<session>.waiting` files will work.
+
+### Claude Code
+
+Add the following to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.tmux/plugins/amux/integrations/claude/amux-signal.sh"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.tmux/plugins/amux/integrations/claude/amux-signal.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.tmux/plugins/amux/integrations/claude/amux-signal.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.tmux/plugins/amux/integrations/claude/amux-signal.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Adjust the path if amux is installed elsewhere.
+
+### OpenCode
+
+Symlink the plugin into your global plugins directory (note: the `.js` extension is required):
+
+```sh
+ln -s ~/.tmux/plugins/amux/integrations/opencode/amux-signal.js \
+      ~/.config/opencode/plugins/amux-signal.js
+```
+
+### Signal Protocol
+
+Integrations write signal files to `$XDG_RUNTIME_DIR/amux/`:
+
+- `touch <dir>/<session-name>.waiting` — agent is idle, waiting for input
+- `rm <dir>/<session-name>.waiting` — agent is busy or session ended
+
+amux checks this directory every 2 seconds (on each auto-refresh). To add support for another tool, write a hook/plugin that creates and removes these files based on the tool's lifecycle events.
+
 ## How it works
 
 1. **Toggle script** (`scripts/toggle.sh`) creates or kills a tmux pane running the amux binary. Saves and restores window layouts so other panes aren't resized.
@@ -122,7 +201,7 @@ set-option -g @amux-position "left"
 ```sh
 zig build              # debug build
 zig build --release=fast  # release build
-zig build test         # run tests (79 tests)
+zig build test         # run tests (88 tests)
 zig build run          # run directly
 ```
 
@@ -131,12 +210,15 @@ zig build run          # run directly
 ```
 src/
   main.zig        Entry point, vaxis event loop, filter logic, scroll management
-  tmux.zig        Spawn tmux commands, parse session list, path helpers
+  tmux.zig        Spawn tmux commands, parse session list, agent signal checks
   render.zig      Sidebar rendering: border, sessions, indicators, scroll, help text
   input.zig       Key-to-action mapping
 scripts/
   toggle.sh       Toggle sidebar pane, manage hooks, layout save/restore
   run-amux.sh     Wrapper: exit code handling, sessionizer integration
+integrations/
+  claude/         Claude Code hook (shell script)
+  opencode/       OpenCode plugin (JS module)
 amux.tmux         TPM entry point (auto-builds on first load)
 ```
 

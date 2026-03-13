@@ -355,7 +355,7 @@ fn drawSessionRow(
 
     // Determine styles — pending kill overrides selection highlight
     const bg: Color = if (is_pending_kill) theme.kill_bg else if (is_selected) theme.selection_bg else .default;
-    const name_fg: Color = if (is_pending_kill) theme.kill_fg else if (is_selected) theme.text_bright else theme.text;
+    const name_fg: Color = if (is_pending_kill) theme.kill_fg else if (session.agent_waiting) theme.accent else if (is_selected) theme.text_bright else theme.text;
     const count_fg: Color = if (is_pending_kill) theme.kill_fg else if (is_selected) theme.text else theme.dim;
     const use_strikethrough = is_pending_kill;
 
@@ -372,8 +372,9 @@ fn drawSessionRow(
     }
 
     // Indicator: " ● " (space, indicator, space) starting at left_col
-    const indicator: []const u8 = if (is_current) "\u{25CF}" else if (has_activity) "\u{25CB}" else " ";
-    const indicator_fg: Color = if (is_current) theme.current else if (has_activity) theme.activity else .default;
+    // Priority: agent_waiting(✸) > current(●) > other_attached(○) > blank
+    const indicator: []const u8 = if (session.agent_waiting) "\u{2738}" else if (is_current) "\u{25CF}" else if (has_activity) "\u{25CB}" else " ";
+    const indicator_fg: Color = if (session.agent_waiting) theme.accent else if (is_current) theme.current else if (has_activity) theme.activity else .default;
 
     _ = win.print(&.{
         .{ .text = " ", .style = .{ .bg = bg } },
@@ -461,12 +462,21 @@ fn testSession(name: []const u8, windows: u16, attached: bool, activity: i64) tm
 }
 
 fn testSessionWithPath(name: []const u8, windows: u16, attached: bool, activity: i64, path: []const u8) tmux.Session {
+    return testSessionFull(name, windows, attached, activity, path, false);
+}
+
+fn testSessionWaiting(name: []const u8, windows: u16, attached: bool, activity: i64) tmux.Session {
+    return testSessionFull(name, windows, attached, activity, "", true);
+}
+
+fn testSessionFull(name: []const u8, windows: u16, attached: bool, activity: i64, path: []const u8, agent_waiting: bool) tmux.Session {
     return .{
         .name = name,
         .windows = windows,
         .attached = attached,
         .activity = activity,
         .path = path,
+        .agent_waiting = agent_waiting,
     };
 }
 
@@ -1072,6 +1082,143 @@ test "draw: session with empty path does not get extra row" {
 }
 
 // -- Filter mode display --
+
+// -- Agent waiting indicator --
+
+test "draw: agent_waiting session shows star glyph and accent name" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSessionWaiting("waiting-proj", 2, false, 0),
+        testSession("normal-proj", 1, false, 0),
+    };
+    // Select normal-proj (index 1), so waiting-proj is unselected
+    draw(testing.allocator, win, &sessions, 1, "", null, null, 0);
+
+    // Row 1: ✸ indicator at col 2, accent color
+    try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
+    const glyph_cell = win.readCell(2, 1).?;
+    try testing.expectEqual(theme.accent, glyph_cell.style.fg);
+
+    // Row 1: "waiting-proj" name at col 4 — accent color
+    const name_cell = win.readCell(4, 1).?;
+    try testing.expectEqual(theme.accent, name_cell.style.fg);
+    try testing.expect(!name_cell.style.bold); // not selected
+}
+
+test "draw: agent_waiting + selected shows star glyph and accent bold name" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSessionWaiting("waiting-proj", 2, false, 0),
+        testSession("normal-proj", 1, false, 0),
+    };
+    // Select waiting-proj (index 0)
+    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+
+    // Row 1: ✸ indicator
+    try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
+
+    // Row 1: name — selected + waiting = accent + bold
+    const cell = win.readCell(4, 1).?;
+    try testing.expectEqual(theme.accent, cell.style.fg);
+    try testing.expect(cell.style.bold);
+}
+
+test "draw: agent_waiting overrides current session indicator" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSessionWaiting("myproject", 2, true, 0),
+    };
+    // Current AND waiting — waiting takes priority
+    draw(testing.allocator, win, &sessions, 0, "myproject", null, null, 0);
+
+    // ✸ at col 2, accent color (waiting overrides current)
+    try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
+    const glyph_cell = win.readCell(2, 1).?;
+    try testing.expectEqual(theme.accent, glyph_cell.style.fg);
+}
+
+test "draw: non-waiting session uses normal text color" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSession("normal-proj", 1, false, 0),
+        testSessionWaiting("waiting-proj", 2, false, 0),
+    };
+    // Select waiting-proj (index 1), so normal-proj is unselected
+    draw(testing.allocator, win, &sessions, 1, "", null, null, 0);
+
+    // Row 1: "normal-proj" — no waiting = default text, blank indicator
+    const cell = win.readCell(4, 1).?;
+    try testing.expectEqual(theme.text, cell.style.fg);
+    try testing.expectEqualStrings(" ", readGrapheme(win, 2, 1));
+}
+
+test "draw: pending_kill overrides agent_waiting color" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSessionWaiting("waiting-proj", 2, false, 0),
+    };
+    // Selected + pending kill + waiting — kill should override
+    draw(testing.allocator, win, &sessions, 0, "", @as(usize, 0), null, 0);
+
+    const cell = win.readCell(4, 1).?;
+    try testing.expectEqual(theme.kill_fg, cell.style.fg);
+    try testing.expectEqual(theme.kill_bg, cell.style.bg);
+}
 
 test "draw: filter mode shows filter input on bottom row" {
     var ctx = try createTestWindow(30, 15);

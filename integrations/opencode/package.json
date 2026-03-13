@@ -1,0 +1,8 @@
+{
+  "name": "amux-signal",
+  "version": "0.1.0",
+  "description": "amux agent signal plugin for OpenCode",
+  "main": "amux-signal.js",
+  "type": "module",
+  "license": "MIT"
+}
