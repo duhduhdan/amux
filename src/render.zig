@@ -375,7 +375,7 @@ fn drawSessionRow(
     // Indicator: " ● " (space, indicator, space) starting at left_col
     // Priority: agent_waiting(✸ bright) > watched(✸ dim) > current(●) > blank
     const indicator: []const u8 = if (session.agent_waiting) "\u{2738}" else if (is_watched) "\u{2738}" else if (is_current) "\u{25CF}" else " ";
-    const indicator_fg: Color = if (session.agent_waiting) theme.accent else if (is_watched) theme.dim else if (is_current) theme.current else .default;
+    const indicator_fg: Color = if (session.agent_waiting) theme.accent else if (is_watched) theme.text else if (is_current) theme.current else .default;
 
     _ = win.print(&.{
         .{ .text = " ", .style = .{ .bg = bg } },
@@ -1260,10 +1260,10 @@ test "draw: watched session without agent_waiting shows dim star" {
     try w.put(testing.allocator, "watched-proj", {});
     draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &w);
 
-    // Row 1: ✸ indicator at col 2, dim color (watched but busy)
+    // Row 1: ✸ indicator at col 2, default text color (watched but busy)
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
     const glyph_cell = win.readCell(2, 1).?;
-    try testing.expectEqual(theme.dim, glyph_cell.style.fg);
+    try testing.expectEqual(theme.text, glyph_cell.style.fg);
 
     // Name should be normal text (not accent — agent isn't waiting)
     const name_cell = win.readCell(4, 1).?;
