@@ -31,5 +31,8 @@ tmux bind-key "$AMUX_KEY" run-shell "$CURRENT_DIR/scripts/toggle.sh"
 # Restore sidebar if it was enabled before tmux restart (works with tmux-resurrect)
 ENABLED=$(tmux show-option -gqv @amux-enabled)
 if [ "$ENABLED" = "on" ] && [ -f "$BIN" ]; then
+    # Re-register hooks (lost on tmux restart)
+    tmux set-hook -g client-session-changed "run-shell '$CURRENT_DIR/scripts/toggle.sh recreate'"
+    tmux set-hook -g after-new-window "run-shell '$CURRENT_DIR/scripts/toggle.sh new-window'"
     "$CURRENT_DIR/scripts/toggle.sh"
 fi

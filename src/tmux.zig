@@ -3,13 +3,11 @@ const std = @import("std");
 pub const Session = struct {
     name: []const u8,
     windows: u16,
-    attached: bool,
-    activity: i64,
     path: []const u8,
     agent_waiting: bool = false,
 };
 
-const session_format = "#{session_name}\t#{session_windows}\t#{session_activity}\t#{session_attached}\t#{session_path}";
+const session_format = "#{session_name}\t#{session_windows}\t#{session_path}";
 
 /// Query tmux for all sessions. Returned slices point into arena-allocated memory.
 pub fn listSessions(allocator: std.mem.Allocator) ![]Session {
@@ -34,15 +32,11 @@ pub fn parseSessions(allocator: std.mem.Allocator, raw: []const u8) ![]Session {
         var fields = std.mem.splitScalar(u8, line, '\t');
         const name = fields.next() orelse continue;
         const windows_str = fields.next() orelse continue;
-        const activity_str = fields.next() orelse continue;
-        const attached_str = fields.next() orelse continue;
         const path = fields.next() orelse "";
 
         try sessions.append(allocator, .{
             .name = name,
             .windows = std.fmt.parseInt(u16, windows_str, 10) catch 0,
-            .activity = std.fmt.parseInt(i64, activity_str, 10) catch 0,
-            .attached = std.mem.eql(u8, attached_str, "1"),
             .path = path,
         });
     }
@@ -130,12 +124,6 @@ pub fn shortenPath(allocator: std.mem.Allocator, path: []const u8, max_len: usiz
     return std.fmt.allocPrint(allocator, "\xE2\x80\xA6{s}", .{display[start..]}) catch return display;
 }
 
-/// Check if a session has had recent activity (within last 10 seconds).
-pub fn hasRecentActivity(session: Session) bool {
-    const now = std.time.timestamp();
-    return (now - session.activity) < 10;
-}
-
 /// Check if an agent is waiting for input in the given session.
 /// Looks for `$XDG_RUNTIME_DIR/amux/<name>.waiting` on the filesystem.
 /// Falls back to `/tmp/amux-<uid>/` if XDG_RUNTIME_DIR is not set.
@@ -146,10 +134,15 @@ pub fn checkAgentWaiting(allocator: std.mem.Allocator, name: []const u8) bool {
     return true;
 }
 
-/// Populate agent_waiting for each session by checking signal files.
-pub fn markAgentWaiting(allocator: std.mem.Allocator, sessions: []Session) void {
+/// Populate agent_waiting for watched sessions by checking signal files.
+/// Only sessions whose name is in the watched set are checked.
+pub fn markAgentWaiting(allocator: std.mem.Allocator, sessions: []Session, watched: *const std.StringHashMapUnmanaged(void)) void {
     for (sessions) |*s| {
-        s.agent_waiting = checkAgentWaiting(allocator, s.name);
+        if (watched.contains(s.name)) {
+            s.agent_waiting = checkAgentWaiting(allocator, s.name);
+        } else {
+            s.agent_waiting = false;
+        }
     }
 }
 
@@ -201,23 +194,21 @@ fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) ![]const u
 // ---------------------------------------------------------------------------
 
 test "parseSessions: single session" {
-    const raw = "dotfiles\t3\t1710000000\t1\t/home/user/dev/dotfiles\n";
+    const raw = "dotfiles\t3\t/home/user/dev/dotfiles\n";
     const sessions = try parseSessions(std.testing.allocator, raw);
     defer std.testing.allocator.free(sessions);
 
     try std.testing.expectEqual(@as(usize, 1), sessions.len);
     try std.testing.expectEqualStrings("dotfiles", sessions[0].name);
     try std.testing.expectEqual(@as(u16, 3), sessions[0].windows);
-    try std.testing.expectEqual(@as(i64, 1710000000), sessions[0].activity);
-    try std.testing.expect(sessions[0].attached);
     try std.testing.expectEqualStrings("/home/user/dev/dotfiles", sessions[0].path);
 }
 
 test "parseSessions: multiple sessions" {
     const raw =
-        "project-alpha\t2\t1710000010\t0\t/home/user/dev/alpha\n" ++
-        "dotfiles\t5\t1710000020\t1\t/home/user/dev/dotfiles\n" ++
-        "notes\t1\t1710000030\t0\t/home/user/notes\n";
+        "project-alpha\t2\t/home/user/dev/alpha\n" ++
+        "dotfiles\t5\t/home/user/dev/dotfiles\n" ++
+        "notes\t1\t/home/user/notes\n";
     const sessions = try parseSessions(std.testing.allocator, raw);
     defer std.testing.allocator.free(sessions);
 
@@ -225,15 +216,12 @@ test "parseSessions: multiple sessions" {
 
     try std.testing.expectEqualStrings("project-alpha", sessions[0].name);
     try std.testing.expectEqual(@as(u16, 2), sessions[0].windows);
-    try std.testing.expect(!sessions[0].attached);
 
     try std.testing.expectEqualStrings("dotfiles", sessions[1].name);
     try std.testing.expectEqual(@as(u16, 5), sessions[1].windows);
-    try std.testing.expect(sessions[1].attached);
 
     try std.testing.expectEqualStrings("notes", sessions[2].name);
     try std.testing.expectEqual(@as(u16, 1), sessions[2].windows);
-    try std.testing.expect(!sessions[2].attached);
     try std.testing.expectEqualStrings("/home/user/notes", sessions[2].path);
 }
 
@@ -249,7 +237,7 @@ test "parseSessions: trailing newline only" {
 
 test "parseSessions: malformed line (missing fields) is skipped" {
     const raw = "only-name\n" ++
-        "good\t2\t1710000000\t0\t/home/user/good\n";
+        "good\t2\t/home/user/good\n";
     const sessions = try parseSessions(std.testing.allocator, raw);
     defer std.testing.allocator.free(sessions);
 
@@ -258,7 +246,7 @@ test "parseSessions: malformed line (missing fields) is skipped" {
 }
 
 test "parseSessions: non-numeric windows defaults to 0" {
-    const raw = "broken\tabc\t1710000000\t0\t/tmp\n";
+    const raw = "broken\tabc\t/tmp\n";
     const sessions = try parseSessions(std.testing.allocator, raw);
     defer std.testing.allocator.free(sessions);
 
@@ -266,7 +254,7 @@ test "parseSessions: non-numeric windows defaults to 0" {
 }
 
 test "parseSessions: missing path field defaults to empty" {
-    const raw = "nope\t1\t1710000000\t0\n";
+    const raw = "nope\t1\n";
     const sessions = try parseSessions(std.testing.allocator, raw);
     defer std.testing.allocator.free(sessions);
 
@@ -316,30 +304,6 @@ test "shortenPath: empty path returns empty" {
     try std.testing.expectEqualStrings("", result);
 }
 
-test "hasRecentActivity: recent timestamp returns true" {
-    const now = std.time.timestamp();
-    const session = Session{
-        .name = "test",
-        .windows = 1,
-        .attached = false,
-        .activity = now - 5, // 5 seconds ago
-        .path = "/tmp",
-    };
-    try std.testing.expect(hasRecentActivity(session));
-}
-
-test "hasRecentActivity: old timestamp returns false" {
-    const now = std.time.timestamp();
-    const session = Session{
-        .name = "test",
-        .windows = 1,
-        .attached = false,
-        .activity = now - 60, // 60 seconds ago
-        .path = "/tmp",
-    };
-    try std.testing.expect(!hasRecentActivity(session));
-}
-
 test "checkAgentWaiting: returns true when signal file exists" {
     // Create a temp directory and signal file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -370,25 +334,39 @@ test "checkAgentWaiting: returns false when signal file absent" {
     try std.testing.expect(!result);
 }
 
-test "markAgentWaiting: populates agent_waiting field" {
+test "markAgentWaiting: only checks watched sessions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var sessions = [_]Session{
-        .{ .name = "a", .windows = 1, .attached = false, .activity = 0, .path = "", .agent_waiting = false },
-        .{ .name = "b", .windows = 1, .attached = false, .activity = 0, .path = "", .agent_waiting = false },
+        .{ .name = "a", .windows = 1, .path = "", .agent_waiting = false },
+        .{ .name = "b", .windows = 1, .path = "", .agent_waiting = false },
     };
-    // Without actual signal files, both should remain false
-    markAgentWaiting(arena.allocator(), &sessions);
+    // Create a watched set with only "a"
+    var watched: std.StringHashMapUnmanaged(void) = .{};
+    defer watched.deinit(std.testing.allocator);
+    try watched.put(std.testing.allocator, "a", {});
+    // Without actual signal files, watched session "a" should be false
+    markAgentWaiting(arena.allocator(), &sessions, &watched);
     try std.testing.expect(!sessions[0].agent_waiting);
     try std.testing.expect(!sessions[1].agent_waiting);
+}
+
+test "markAgentWaiting: unwatched sessions stay false" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var sessions = [_]Session{
+        .{ .name = "a", .windows = 1, .path = "", .agent_waiting = true }, // pre-set to true
+    };
+    // Empty watched set — should reset to false
+    var watched: std.StringHashMapUnmanaged(void) = .{};
+    markAgentWaiting(arena.allocator(), &sessions, &watched);
+    try std.testing.expect(!sessions[0].agent_waiting);
 }
 
 test "Session: agent_waiting defaults to false" {
     const s = Session{
         .name = "test",
         .windows = 1,
-        .attached = false,
-        .activity = 0,
         .path = "",
     };
     try std.testing.expect(!s.agent_waiting);

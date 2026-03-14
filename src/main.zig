@@ -88,9 +88,9 @@ test "containsInsensitive: empty needle matches anything" {
 
 test "filterSessions: filters by substring" {
     const sessions = [_]tmux.Session{
-        .{ .name = "dotfiles", .windows = 1, .attached = false, .activity = 0, .path = "" },
-        .{ .name = "opencode", .windows = 1, .attached = false, .activity = 0, .path = "" },
-        .{ .name = "docs", .windows = 1, .attached = false, .activity = 0, .path = "" },
+        .{ .name = "dotfiles", .windows = 1, .path = "" },
+        .{ .name = "opencode", .windows = 1, .path = "" },
+        .{ .name = "docs", .windows = 1, .path = "" },
     };
     const indices = filterSessions(testing.allocator, &sessions, "do");
     defer testing.allocator.free(indices);
@@ -102,8 +102,8 @@ test "filterSessions: filters by substring" {
 
 test "filterSessions: empty needle returns all" {
     const sessions = [_]tmux.Session{
-        .{ .name = "a", .windows = 1, .attached = false, .activity = 0, .path = "" },
-        .{ .name = "b", .windows = 1, .attached = false, .activity = 0, .path = "" },
+        .{ .name = "a", .windows = 1, .path = "" },
+        .{ .name = "b", .windows = 1, .path = "" },
     };
     const indices = filterSessions(testing.allocator, &sessions, "");
     defer testing.allocator.free(indices);
@@ -178,12 +178,19 @@ pub fn main() !void {
     var filter_buf: [max_filter_len]u8 = undefined;
     var filter_len: usize = 0;
     var scroll_offset: usize = 0;
+    var watched: std.StringHashMapUnmanaged(void) = .{};
+    defer {
+        var it = watched.keyIterator();
+        while (it.next()) |key| allocator.free(key.*);
+        watched.deinit(allocator);
+    }
 
     // Initial render (also sets selected to current session)
     {
         const frame_alloc = arena.allocator();
-        const sessions = tmux.listSessions(frame_alloc) catch &.{};
-        tmux.markAgentWaiting(frame_alloc, @constCast(sessions));
+        var no_sessions: [0]tmux.Session = .{};
+        const sessions = tmux.listSessions(frame_alloc) catch no_sessions[0..];
+        tmux.markAgentWaiting(frame_alloc, sessions, &watched);
         const current = tmux.getCurrentSession(frame_alloc) catch "";
 
         selected = findCurrentIndex(sessions, current);
@@ -196,7 +203,7 @@ pub fn main() !void {
         else
             false;
         render.adjustScroll(&scroll_offset, selected, sessions.len, win.height, selected_has_path);
-        render.draw(frame_alloc, win, sessions, selected, current, pending_kill, null, scroll_offset);
+        render.draw(frame_alloc, win, sessions, selected, current, pending_kill, null, scroll_offset, &watched);
         try vx.render(tty.writer());
     }
 
@@ -315,6 +322,25 @@ pub fn main() !void {
                                     pending_kill = selected;
                                 }
                             },
+                            .watch => {
+                                // Toggle watch on the selected session.
+                                // Session names are arena-allocated, so dupe into the
+                                // GPA-backed allocator for the watched set's lifetime.
+                                _ = arena.reset(.retain_capacity);
+                                const frame_alloc2 = arena.allocator();
+                                const sessions = tmux.listSessions(frame_alloc2) catch &.{};
+                                if (sessions.len > 0 and selected < sessions.len) {
+                                    const name = sessions[selected].name;
+                                    if (watched.fetchRemove(name)) |kv| {
+                                        allocator.free(kv.key);
+                                    } else {
+                                        const duped = allocator.dupe(u8, name) catch break;
+                                        watched.put(allocator, duped, {}) catch {
+                                            allocator.free(duped);
+                                        };
+                                    }
+                                }
+                            },
                             .create => {
                                 pending_kill = null;
                                 exit_code = EXIT_CREATE;
@@ -342,8 +368,9 @@ pub fn main() !void {
         // Refresh session data every frame
         _ = arena.reset(.retain_capacity);
         const frame_alloc = arena.allocator();
-        const all_sessions = tmux.listSessions(frame_alloc) catch &.{};
-        tmux.markAgentWaiting(frame_alloc, @constCast(all_sessions));
+        var no_sessions: [0]tmux.Session = .{};
+        const all_sessions = tmux.listSessions(frame_alloc) catch no_sessions[0..];
+        tmux.markAgentWaiting(frame_alloc, all_sessions, &watched);
         const current = tmux.getCurrentSession(frame_alloc) catch "";
 
         // In filter mode, show only matching sessions
@@ -381,7 +408,7 @@ pub fn main() !void {
 
         // Render
         win.clear();
-        render.draw(frame_alloc, win, display_sessions, selected, current, pending_kill, filter_text, scroll_offset);
+        render.draw(frame_alloc, win, display_sessions, selected, current, pending_kill, filter_text, scroll_offset, &watched);
         try vx.render(tty.writer());
     }
 
