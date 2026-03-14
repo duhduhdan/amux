@@ -429,25 +429,18 @@ const testing = std.testing;
 const Screen = vaxis.Screen;
 const Window = vaxis.Window;
 
-/// Create a Screen + Window pair for testing at the given dimensions.
-/// Caller must `defer screen.deinit(testing.allocator)`.
-fn createTestWindow(cols: u16, rows: u16) !struct { screen: Screen, win: Window } {
-    var screen = try Screen.init(testing.allocator, .{
+/// Create a Screen + Arena pair for testing at the given dimensions.
+/// Caller must `defer ctx.screen.deinit(testing.allocator)` and
+/// `defer ctx.arena.deinit()`. Pass `ctx.arena.allocator()` to `draw()`
+/// so that allocPrint leaks are detected through the backing testing.allocator.
+fn createTestWindow(cols: u16, rows: u16) !struct { screen: Screen, arena: std.heap.ArenaAllocator } {
+    const screen = try Screen.init(testing.allocator, .{
         .cols = cols,
         .rows = rows,
         .x_pixel = 0,
         .y_pixel = 0,
     });
-    const win: Window = .{
-        .x_off = 0,
-        .y_off = 0,
-        .parent_x_off = 0,
-        .parent_y_off = 0,
-        .width = screen.width,
-        .height = screen.height,
-        .screen = &screen,
-    };
-    return .{ .screen = screen, .win = win };
+    return .{ .screen = screen, .arena = std.heap.ArenaAllocator.init(testing.allocator) };
 }
 
 /// Read the grapheme string from a cell, returning " " for default/empty cells.
@@ -485,6 +478,7 @@ fn testSessionFull(name: []const u8, windows: u16, attached: bool, activity: i64
 test "draw: border corners and title" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -495,7 +489,7 @@ test "draw: border corners and title" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 
     // Top-left corner ┌
     try testing.expectEqualStrings("\u{250C}", readGrapheme(win, 0, 0));
@@ -524,6 +518,7 @@ test "draw: border corners and title" {
 test "draw: side borders on content rows" {
     var ctx = try createTestWindow(20, 10);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -534,7 +529,7 @@ test "draw: side borders on content rows" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 
     // Every content row (1 to height-2) should have │ at col 0 and col width-1
     var row: u16 = 1;
@@ -549,6 +544,7 @@ test "draw: side borders on content rows" {
 test "draw: empty sessions shows 'No sessions' inside border" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -559,7 +555,7 @@ test "draw: empty sessions shows 'No sessions' inside border" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 
     // " No sessions" printed at content_left=1, row 1
     // Text starts with space, so 'N' at col 2
@@ -576,6 +572,7 @@ test "draw: empty sessions shows 'No sessions' inside border" {
 test "draw: session name starts at col 4 (border + indicator prefix)" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -589,7 +586,7 @@ test "draw: session name starts at col 4 (border + indicator prefix)" {
     const sessions = [_]tmux.Session{
         testSession("dotfiles", 3, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // left_col(1) + prefix_width(3) = col 4
     try testing.expectEqualStrings("d", readGrapheme(win, 4, 1));
@@ -602,6 +599,7 @@ test "draw: session name starts at col 4 (border + indicator prefix)" {
 test "draw: current session gets green filled circle indicator" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -615,7 +613,7 @@ test "draw: current session gets green filled circle indicator" {
     const sessions = [_]tmux.Session{
         testSession("myproject", 2, true, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "myproject", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "myproject", null, null, 0);
 
     // Indicator ● at col 2 (left_col=1, space at 1, indicator at 2), row 1
     try testing.expectEqualStrings("\u{25CF}", readGrapheme(win, 2, 1));
@@ -628,6 +626,7 @@ test "draw: current session gets green filled circle indicator" {
 test "draw: session with recent activity gets yellow open circle" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -642,7 +641,7 @@ test "draw: session with recent activity gets yellow open circle" {
     const sessions = [_]tmux.Session{
         testSession("active-proj", 1, false, now - 2), // 2 seconds ago = recent
     };
-    draw(testing.allocator, win, &sessions, 0, "other", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "other", null, null, 0);
 
     // Indicator ○ at col 2, row 1
     try testing.expectEqualStrings("\u{25CB}", readGrapheme(win, 2, 1));
@@ -655,6 +654,7 @@ test "draw: session with recent activity gets yellow open circle" {
 test "draw: selected row has polar2 background within content area" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -669,7 +669,7 @@ test "draw: selected row has polar2 background within content area" {
         testSession("first", 1, false, 0),
         testSession("second", 2, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 1, "", null, null, 0); // select index 1 = "second"
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0); // select index 1 = "second"
 
     // Row 2 (list_start=1, index 1 → row 2): content cols 1..28 should have polar2 bg
     const selected_row: u16 = 2;
@@ -695,6 +695,7 @@ test "draw: selected row has polar2 background within content area" {
 test "draw: selected session name is bold with snow2 foreground" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -708,7 +709,7 @@ test "draw: selected session name is bold with snow2 foreground" {
     const sessions = [_]tmux.Session{
         testSession("dotfiles", 3, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Name at col 4, row 1 — selected
     const cell = win.readCell(4, 1).?;
@@ -721,6 +722,7 @@ test "draw: selected session name is bold with snow2 foreground" {
 test "draw: window count is right-aligned within content area" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -734,7 +736,7 @@ test "draw: window count is right-aligned within content area" {
     const sessions = [_]tmux.Session{
         testSession("dotfiles", 3, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // content_width=28, count "3" (len=1)
     // count_col = 1 + 28 - 1 - 1 = 27
@@ -748,6 +750,7 @@ test "draw: window count is right-aligned within content area" {
 test "draw: help text renders inside border above bottom" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -758,7 +761,7 @@ test "draw: help text renders inside border above bottom" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 
     // help_row = 12: " j/k nav  ↵ sel  / filter"
     // 'j' at col 2 in accent color
@@ -779,6 +782,7 @@ test "draw: sessions beyond visible area are not rendered" {
     // Height 7: max_visible = 7-2-2 = 3. Sessions at rows 1,2,3. Help at rows 4,5. Border at 6.
     var ctx = try createTestWindow(30, 7);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -796,7 +800,7 @@ test "draw: sessions beyond visible area are not rendered" {
         testSession("four", 1, false, 0), // should NOT render
         testSession("five", 1, false, 0), // should NOT render
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Rows 1,2,3 should have session names (col 4 = first char of name)
     try testing.expectEqualStrings("o", readGrapheme(win, 4, 1)); // "one"
@@ -816,6 +820,7 @@ test "draw: long session name is truncated to fit within content area" {
     // Width 20, content_width=18: prefix=3, suffix=5 → name_max = 18-3-5 = 10
     var ctx = try createTestWindow(20, 10);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -829,7 +834,7 @@ test "draw: long session name is truncated to fit within content area" {
     const sessions = [_]tmux.Session{
         testSession("this-is-a-very-long-session-name", 1, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Name starts at col 4 (left_col=1 + prefix=3)
     try testing.expectEqualStrings("t", readGrapheme(win, 4, 1));
@@ -845,6 +850,7 @@ test "draw: long session name is truncated to fit within content area" {
 test "draw: small window (< 3x3) does not panic" {
     var ctx = try createTestWindow(2, 2);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -856,12 +862,13 @@ test "draw: small window (< 3x3) does not panic" {
     };
 
     // Should return immediately without crashing
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 }
 
 test "draw: zero-size window does not panic" {
     var ctx = try createTestWindow(0, 0);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -872,7 +879,7 @@ test "draw: zero-size window does not panic" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 }
 
 // -- Multiple sessions rendering --
@@ -880,6 +887,7 @@ test "draw: zero-size window does not panic" {
 test "draw: multiple sessions render on consecutive rows" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -895,7 +903,7 @@ test "draw: multiple sessions render on consecutive rows" {
         testSession("beta", 2, false, 0),
         testSession("gamma", 3, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 1, "alpha", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "alpha", null, null, 0);
 
     // Row 1: "alpha" — current session (selected=1, so not selected)
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
@@ -918,6 +926,7 @@ test "draw: multiple sessions render on consecutive rows" {
 test "draw: pending kill session has red background and strikethrough" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -933,7 +942,7 @@ test "draw: pending kill session has red background and strikethrough" {
         testSession("beta", 2, false, 0),
     };
     // selected=0, pending_kill=0 (alpha marked for deletion)
-    draw(testing.allocator, win, &sessions, 0, "", @as(usize, 0), null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", @as(usize, 0), null, 0);
 
     // Row 1 (alpha): should have kill_bg background
     const kill_cell = win.readCell(4, 1).?;
@@ -950,6 +959,7 @@ test "draw: pending kill session has red background and strikethrough" {
 test "draw: pending kill on non-selected row still shows red" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -965,7 +975,7 @@ test "draw: pending kill on non-selected row still shows red" {
         testSession("beta", 2, false, 0),
     };
     // selected=1 (beta), pending_kill=0 (alpha)
-    draw(testing.allocator, win, &sessions, 1, "", @as(usize, 0), null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", @as(usize, 0), null, 0);
 
     // Row 1 (alpha): pending kill — red bg
     const kill_cell = win.readCell(4, 1).?;
@@ -979,6 +989,7 @@ test "draw: pending kill on non-selected row still shows red" {
 test "draw: help text shows key hints" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -989,7 +1000,7 @@ test "draw: help text shows key hints" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
 
     // Row 12: keys in accent. 'j' at col 2
     try testing.expectEqualStrings("j", readGrapheme(win, 2, 12));
@@ -1000,6 +1011,7 @@ test "draw: help text shows key hints" {
 test "draw: selected session shows path on the row below" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1014,7 +1026,7 @@ test "draw: selected session shows path on the row below" {
         testSessionWithPath("dotfiles", 3, false, 0, "/tmp/dotfiles"),
         testSession("other", 1, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Row 1: "dotfiles" name at col 4
     try testing.expectEqualStrings("d", readGrapheme(win, 4, 1));
@@ -1032,6 +1044,7 @@ test "draw: selected session shows path on the row below" {
 test "draw: non-selected session does not show path" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1047,7 +1060,7 @@ test "draw: non-selected session does not show path" {
         testSessionWithPath("beta", 2, false, 0, "/tmp/beta"),
     };
     // Select beta (index 1) — alpha's path should NOT be shown
-    draw(testing.allocator, win, &sessions, 1, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0);
 
     // Row 1: "alpha" — no path below
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
@@ -1060,6 +1073,7 @@ test "draw: non-selected session does not show path" {
 test "draw: session with empty path does not get extra row" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1075,7 +1089,7 @@ test "draw: session with empty path does not get extra row" {
         testSession("beta", 2, false, 0),
     };
     // Select alpha (index 0) — no path, so beta should be on row 2 (no shift)
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
     try testing.expectEqualStrings("b", readGrapheme(win, 4, 2));
@@ -1088,6 +1102,7 @@ test "draw: session with empty path does not get extra row" {
 test "draw: agent_waiting session shows star glyph and accent name" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1103,7 +1118,7 @@ test "draw: agent_waiting session shows star glyph and accent name" {
         testSession("normal-proj", 1, false, 0),
     };
     // Select normal-proj (index 1), so waiting-proj is unselected
-    draw(testing.allocator, win, &sessions, 1, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0);
 
     // Row 1: ✸ indicator at col 2, accent color
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
@@ -1119,6 +1134,7 @@ test "draw: agent_waiting session shows star glyph and accent name" {
 test "draw: agent_waiting + selected shows star glyph and accent bold name" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1134,7 +1150,7 @@ test "draw: agent_waiting + selected shows star glyph and accent bold name" {
         testSession("normal-proj", 1, false, 0),
     };
     // Select waiting-proj (index 0)
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Row 1: ✸ indicator
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
@@ -1148,6 +1164,7 @@ test "draw: agent_waiting + selected shows star glyph and accent bold name" {
 test "draw: agent_waiting overrides current session indicator" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1162,7 +1179,7 @@ test "draw: agent_waiting overrides current session indicator" {
         testSessionWaiting("myproject", 2, true, 0),
     };
     // Current AND waiting — waiting takes priority
-    draw(testing.allocator, win, &sessions, 0, "myproject", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "myproject", null, null, 0);
 
     // ✸ at col 2, accent color (waiting overrides current)
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
@@ -1173,6 +1190,7 @@ test "draw: agent_waiting overrides current session indicator" {
 test "draw: non-waiting session uses normal text color" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1188,7 +1206,7 @@ test "draw: non-waiting session uses normal text color" {
         testSessionWaiting("waiting-proj", 2, false, 0),
     };
     // Select waiting-proj (index 1), so normal-proj is unselected
-    draw(testing.allocator, win, &sessions, 1, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0);
 
     // Row 1: "normal-proj" — no waiting = default text, blank indicator
     const cell = win.readCell(4, 1).?;
@@ -1199,6 +1217,7 @@ test "draw: non-waiting session uses normal text color" {
 test "draw: pending_kill overrides agent_waiting color" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1213,7 +1232,7 @@ test "draw: pending_kill overrides agent_waiting color" {
         testSessionWaiting("waiting-proj", 2, false, 0),
     };
     // Selected + pending kill + waiting — kill should override
-    draw(testing.allocator, win, &sessions, 0, "", @as(usize, 0), null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", @as(usize, 0), null, 0);
 
     const cell = win.readCell(4, 1).?;
     try testing.expectEqual(theme.kill_fg, cell.style.fg);
@@ -1223,6 +1242,7 @@ test "draw: pending_kill overrides agent_waiting color" {
 test "draw: filter mode shows filter input on bottom row" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1233,7 +1253,7 @@ test "draw: filter mode shows filter input on bottom row" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, "dot", 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "dot", 0);
 
     // Row 13 (help_row+1): " / dot" — '/' at col 2, 'd' at col 4
     try testing.expectEqualStrings("/", readGrapheme(win, 2, 13));
@@ -1253,6 +1273,7 @@ test "draw: filter mode shows filter input on bottom row" {
 test "draw: filter mode shows cancel hint on help row" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1263,7 +1284,7 @@ test "draw: filter mode shows cancel hint on help row" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, "", 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "", 0);
 
     // Row 12 (help_row): " esc cancel  enter select" — 'e' at col 2
     try testing.expectEqualStrings("e", readGrapheme(win, 2, 12));
@@ -1272,6 +1293,7 @@ test "draw: filter mode shows cancel hint on help row" {
 test "draw: filter mode with empty string shows cursor at start" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1282,7 +1304,7 @@ test "draw: filter mode with empty string shows cursor at start" {
         .screen = &ctx.screen,
     };
 
-    draw(testing.allocator, win, &.{}, 0, "", null, "", 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "", 0);
 
     // " / " then cursor at col 4 (content_left=1 + 3 + 0)
     try testing.expectEqualStrings("/", readGrapheme(win, 2, 13));
@@ -1296,6 +1318,7 @@ test "draw: scroll_offset skips sessions above the view" {
     // Height 7: max_visible = 7-2-2 = 3 rows for sessions
     var ctx = try createTestWindow(30, 7);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1314,7 +1337,7 @@ test "draw: scroll_offset skips sessions above the view" {
         testSession("epsilon", 5, false, 0),
     };
     // scroll_offset=2: skip alpha and beta, show gamma onward
-    draw(testing.allocator, win, &sessions, 2, "", null, null, 2);
+    draw(ctx.arena.allocator(), win, &sessions, 2, "", null, null, 2);
 
     // Row 1: gamma (first visible session)
     try testing.expectEqualStrings("g", readGrapheme(win, 4, 1));
@@ -1323,6 +1346,7 @@ test "draw: scroll_offset skips sessions above the view" {
 test "draw: scroll up indicator shown when offset > 0" {
     var ctx = try createTestWindow(30, 7);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1340,7 +1364,7 @@ test "draw: scroll up indicator shown when offset > 0" {
         testSession("delta", 4, false, 0),
     };
     // scroll_offset=1: alpha is above
-    draw(testing.allocator, win, &sessions, 1, "", null, null, 1);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 1);
 
     // Row 1: ▲ indicator
     try testing.expectEqualStrings("\xE2\x96\xB2", readGrapheme(win, 2, 1));
@@ -1351,6 +1375,7 @@ test "draw: scroll up indicator shown when offset > 0" {
 test "draw: scroll down indicator shown when sessions below" {
     var ctx = try createTestWindow(30, 7);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1369,7 +1394,7 @@ test "draw: scroll down indicator shown when sessions below" {
         testSession("epsilon", 5, false, 0),
     };
     // scroll_offset=0, more sessions than fit
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Should show ▼ at some row below the visible sessions
     // With max_visible=3 and 5 sessions, we expect ▼ indicator
@@ -1381,6 +1406,7 @@ test "draw: scroll down indicator shown when sessions below" {
 test "draw: no scroll indicators when all sessions fit" {
     var ctx = try createTestWindow(30, 15);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1395,7 +1421,7 @@ test "draw: no scroll indicators when all sessions fit" {
         testSession("alpha", 1, false, 0),
         testSession("beta", 2, false, 0),
     };
-    draw(testing.allocator, win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
 
     // Row 1: alpha (no ▲)
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
@@ -1546,6 +1572,7 @@ test "integration: adjustScroll then draw shows selected session visible" {
     // 6 sessions, height=7 (max_vis=3). Select session 4 (0-indexed).
     var ctx = try createTestWindow(30, 7);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1568,7 +1595,7 @@ test "integration: adjustScroll then draw shows selected session visible" {
     var offset: usize = 0;
     adjustScroll(&offset, selected, sessions.len, 7, false);
 
-    draw(testing.allocator, win, &sessions, selected, "", null, null, offset);
+    draw(ctx.arena.allocator(), win, &sessions, selected, "", null, null, offset);
 
     // The selected session "echo" must appear somewhere in the rendered rows.
     // Scan rows 1..4 (content rows) for 'e' at col 4.
@@ -1591,6 +1618,7 @@ test "integration: adjustScroll with path then draw shows both session and path"
     // 6 sessions, height=7 (max_vis=3). Select session 4 with path.
     var ctx = try createTestWindow(30, 7);
     defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
     const win: Window = .{
         .x_off = 0,
         .y_off = 0,
@@ -1613,7 +1641,7 @@ test "integration: adjustScroll with path then draw shows both session and path"
     var offset: usize = 0;
     adjustScroll(&offset, selected, sessions.len, 7, true);
 
-    draw(testing.allocator, win, &sessions, selected, "", null, null, offset);
+    draw(ctx.arena.allocator(), win, &sessions, selected, "", null, null, offset);
 
     // "echo" must be visible and bold
     var echo_row: ?u16 = null;

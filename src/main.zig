@@ -182,8 +182,9 @@ pub fn main() !void {
     // Initial render (also sets selected to current session)
     {
         const frame_alloc = arena.allocator();
-        const sessions = tmux.listSessions(frame_alloc) catch &.{};
-        tmux.markAgentWaiting(frame_alloc, @constCast(sessions));
+        var no_sessions: [0]tmux.Session = .{};
+        const sessions = tmux.listSessions(frame_alloc) catch no_sessions[0..];
+        tmux.markAgentWaiting(frame_alloc, sessions);
         const current = tmux.getCurrentSession(frame_alloc) catch "";
 
         selected = findCurrentIndex(sessions, current);
@@ -342,8 +343,9 @@ pub fn main() !void {
         // Refresh session data every frame
         _ = arena.reset(.retain_capacity);
         const frame_alloc = arena.allocator();
-        const all_sessions = tmux.listSessions(frame_alloc) catch &.{};
-        tmux.markAgentWaiting(frame_alloc, @constCast(all_sessions));
+        var no_sessions: [0]tmux.Session = .{};
+        const all_sessions = tmux.listSessions(frame_alloc) catch no_sessions[0..];
+        tmux.markAgentWaiting(frame_alloc, all_sessions);
         const current = tmux.getCurrentSession(frame_alloc) catch "";
 
         // In filter mode, show only matching sessions

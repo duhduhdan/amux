@@ -176,6 +176,7 @@ fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) ![]const u
 
     var stdout_buf: std.ArrayList(u8) = .{};
     var stderr_buf: std.ArrayList(u8) = .{};
+    defer stderr_buf.deinit(allocator);
 
     child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024) catch |err| {
         _ = child.wait() catch {};
