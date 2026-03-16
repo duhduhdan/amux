@@ -50,24 +50,28 @@ while true; do
     fi
 done
 
-# If sidebar is still marked as enabled, the hook didn't handle cleanup.
-# Do it ourselves.
+# If sidebar is still marked as enabled, clean up this window's sidebar.
 ENABLED=$(tmux show-option -gqv @amux-enabled)
 if [ "$ENABLED" != "on" ]; then
     # Hook already handled cleanup — just exit.
     exit 0
 fi
 
-SAVED_LAYOUT=$(tmux show-option -gqv @amux-saved-layout)
-
-# Binary exited normally. Pane is still alive because this script is still running.
-# Clean up state.
-tmux set-option -g @amux-pane-id ""
-tmux set-option -g @amux-enabled "off"
-tmux set-option -g @amux-saved-layout ""
-tmux set-hook -gu client-session-changed
+# Restore this window's layout
+SAVED_LAYOUT=$(tmux show-option -wqv @amux-saved-layout)
+tmux set-option -wu @amux-saved-layout
 
 # Kill this pane and restore layout via a background tmux command.
 # We use run-shell so the select-layout happens after the pane is gone.
 PANE_ID=$(tmux display-message -p '#{pane_id}')
 tmux run-shell -b "tmux kill-pane -t $PANE_ID 2>/dev/null; tmux select-layout '$SAVED_LAYOUT' 2>/dev/null"
+
+# Check if any amux panes remain (aside from this one that's about to die)
+REMAINING=$(tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
+    | awk -v self="$PANE_ID" '$2 == "amux" && $1 != self' | wc -l)
+if [ "$REMAINING" -eq 0 ]; then
+    # Last sidebar — disable globally
+    tmux set-option -g @amux-enabled "off"
+    tmux set-hook -gu client-session-changed
+    tmux set-hook -gu after-new-window
+fi

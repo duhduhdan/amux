@@ -7,6 +7,7 @@ pub const Action = enum {
     delete,
     create,
     filter,
+    watch,
     quit,
     none,
 };
@@ -31,6 +32,9 @@ pub fn mapKey(key: vaxis.Key) Action {
 
     // Create
     if (key.matches('n', .{})) return .create;
+
+    // Watch
+    if (key.matches('w', .{})) return .watch;
 
     // Filter
     if (key.matches('/', .{})) return .filter;
@@ -83,6 +87,10 @@ test "mapKey: d maps to delete" {
 
 test "mapKey: n maps to create" {
     try testing.expectEqual(Action.create, mapKey(testKey('n', .{})));
+}
+
+test "mapKey: w maps to watch" {
+    try testing.expectEqual(Action.watch, mapKey(testKey('w', .{})));
 }
 
 test "mapKey: / maps to filter" {

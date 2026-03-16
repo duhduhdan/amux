@@ -15,7 +15,6 @@ const theme = struct {
     const text_bright: Color = .{ .index = 15 }; // bright white — selected session
     const accent: Color = .{ .index = 14 }; // bright cyan — title, glyph
     const current: Color = .{ .index = 2 }; // green — current session indicator
-    const activity: Color = .{ .index = 3 }; // yellow — activity indicator
     const kill_bg: Color = .{ .index = 1 }; // red — pending kill background
     const kill_fg: Color = .{ .index = 15 }; // bright white — pending kill text
 };
@@ -126,6 +125,7 @@ pub fn adjustScroll(
 /// (first `d` pressed, waiting for confirmation).
 /// filter_text: if non-null, filter mode is active — show the filter input line.
 /// scroll_offset: index of the first session to display (for scrolling).
+/// watched: set of session names the user is watching for agent notifications.
 pub fn draw(
     allocator: std.mem.Allocator,
     win: vaxis.Window,
@@ -135,6 +135,7 @@ pub fn draw(
     pending_kill_index: ?usize,
     filter_text: ?[]const u8,
     scroll_offset: usize,
+    watched: *const std.StringHashMapUnmanaged(void),
 ) void {
     const width: usize = win.width;
     const height: usize = win.height;
@@ -186,10 +187,10 @@ pub fn draw(
 
             const is_selected = i == selected;
             const is_current = std.mem.eql(u8, session.name, current_session);
-            const other_attached = session.attached and !is_current;
             const is_pending_kill = if (pending_kill_index) |pk| pk == i else false;
+            const is_watched = watched.contains(session.name);
 
-            drawSessionRow(allocator, win, row, content_left, content_width, session, is_selected, is_current, other_attached, is_pending_kill);
+            drawSessionRow(allocator, win, row, content_left, content_width, session, is_selected, is_current, is_pending_kill, is_watched);
             row += 1;
             rendered_to = i + 1;
 
@@ -261,12 +262,12 @@ pub fn draw(
 
             _ = win.print(&.{
                 .{ .text = " ", .style = .{ .fg = theme.dim } },
+                .{ .text = "w", .style = .{ .fg = theme.accent } },
+                .{ .text = " watch  ", .style = .{ .fg = theme.dim } },
                 .{ .text = "n", .style = .{ .fg = theme.accent } },
                 .{ .text = " new  ", .style = .{ .fg = theme.dim } },
                 .{ .text = "d", .style = .{ .fg = theme.accent } },
-                .{ .text = " kill  ", .style = .{ .fg = theme.dim } },
-                .{ .text = "q", .style = .{ .fg = theme.accent } },
-                .{ .text = " quit", .style = .{ .fg = theme.dim } },
+                .{ .text = " kill", .style = .{ .fg = theme.dim } },
             }, .{ .row_offset = help_row + 1, .col_offset = @intCast(content_left) });
         }
     }
@@ -347,8 +348,8 @@ fn drawSessionRow(
     session: tmux.Session,
     is_selected: bool,
     is_current: bool,
-    has_activity: bool,
     is_pending_kill: bool,
+    is_watched: bool,
 ) void {
     const row_u16: u16 = @intCast(row);
     const left: u16 = @intCast(left_col);
@@ -372,9 +373,9 @@ fn drawSessionRow(
     }
 
     // Indicator: " ● " (space, indicator, space) starting at left_col
-    // Priority: agent_waiting(✸) > current(●) > other_attached(○) > blank
-    const indicator: []const u8 = if (session.agent_waiting) "\u{2738}" else if (is_current) "\u{25CF}" else if (has_activity) "\u{25CB}" else " ";
-    const indicator_fg: Color = if (session.agent_waiting) theme.accent else if (is_current) theme.current else if (has_activity) theme.activity else .default;
+    // Priority: agent_waiting(✸ bright) > watched(✸ dim) > current(●) > blank
+    const indicator: []const u8 = if (session.agent_waiting) "\u{2738}" else if (is_watched) "\u{2738}" else if (is_current) "\u{25CF}" else " ";
+    const indicator_fg: Color = if (session.agent_waiting) theme.accent else if (is_watched) theme.text else if (is_current) theme.current else .default;
 
     _ = win.print(&.{
         .{ .text = " ", .style = .{ .bg = bg } },
@@ -429,6 +430,9 @@ const testing = std.testing;
 const Screen = vaxis.Screen;
 const Window = vaxis.Window;
 
+/// Empty watched set for tests that don't need watch functionality.
+const empty_watched: std.StringHashMapUnmanaged(void) = .{};
+
 /// Create a Screen + Arena pair for testing at the given dimensions.
 /// Caller must `defer ctx.screen.deinit(testing.allocator)` and
 /// `defer ctx.arena.deinit()`. Pass `ctx.arena.allocator()` to `draw()`
@@ -449,28 +453,17 @@ fn readGrapheme(win: Window, col: u16, row: u16) []const u8 {
     return cell.char.grapheme;
 }
 
-/// Build a test session with controlled timestamps.
-fn testSession(name: []const u8, windows: u16, attached: bool, activity: i64) tmux.Session {
-    return testSessionWithPath(name, windows, attached, activity, "");
+/// Build a test session.
+fn testSession(name: []const u8, windows: u16) tmux.Session {
+    return .{ .name = name, .windows = windows, .path = "" };
 }
 
-fn testSessionWithPath(name: []const u8, windows: u16, attached: bool, activity: i64, path: []const u8) tmux.Session {
-    return testSessionFull(name, windows, attached, activity, path, false);
+fn testSessionWithPath(name: []const u8, windows: u16, path: []const u8) tmux.Session {
+    return .{ .name = name, .windows = windows, .path = path };
 }
 
-fn testSessionWaiting(name: []const u8, windows: u16, attached: bool, activity: i64) tmux.Session {
-    return testSessionFull(name, windows, attached, activity, "", true);
-}
-
-fn testSessionFull(name: []const u8, windows: u16, attached: bool, activity: i64, path: []const u8, agent_waiting: bool) tmux.Session {
-    return .{
-        .name = name,
-        .windows = windows,
-        .attached = attached,
-        .activity = activity,
-        .path = path,
-        .agent_waiting = agent_waiting,
-    };
+fn testSessionWaiting(name: []const u8, windows: u16) tmux.Session {
+    return .{ .name = name, .windows = windows, .path = "", .agent_waiting = true };
 }
 
 // -- Border --
@@ -489,7 +482,7 @@ test "draw: border corners and title" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 
     // Top-left corner ┌
     try testing.expectEqualStrings("\u{250C}", readGrapheme(win, 0, 0));
@@ -529,7 +522,7 @@ test "draw: side borders on content rows" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 
     // Every content row (1 to height-2) should have │ at col 0 and col width-1
     var row: u16 = 1;
@@ -555,7 +548,7 @@ test "draw: empty sessions shows 'No sessions' inside border" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 
     // " No sessions" printed at content_left=1, row 1
     // Text starts with space, so 'N' at col 2
@@ -584,9 +577,9 @@ test "draw: session name starts at col 4 (border + indicator prefix)" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("dotfiles", 3, false, 0),
+        testSession("dotfiles", 3),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // left_col(1) + prefix_width(3) = col 4
     try testing.expectEqualStrings("d", readGrapheme(win, 4, 1));
@@ -611,42 +604,14 @@ test "draw: current session gets green filled circle indicator" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("myproject", 2, true, 0),
+        testSession("myproject", 2),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "myproject", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "myproject", null, null, 0, &empty_watched);
 
     // Indicator ● at col 2 (left_col=1, space at 1, indicator at 2), row 1
     try testing.expectEqualStrings("\u{25CF}", readGrapheme(win, 2, 1));
     const cell = win.readCell(2, 1).?;
     try testing.expectEqual(theme.current, cell.style.fg);
-}
-
-// -- Activity indicator --
-
-test "draw: session with recent activity gets yellow open circle" {
-    var ctx = try createTestWindow(30, 15);
-    defer ctx.screen.deinit(testing.allocator);
-    defer ctx.arena.deinit();
-    const win: Window = .{
-        .x_off = 0,
-        .y_off = 0,
-        .parent_x_off = 0,
-        .parent_y_off = 0,
-        .width = ctx.screen.width,
-        .height = ctx.screen.height,
-        .screen = &ctx.screen,
-    };
-
-    const now = std.time.timestamp();
-    const sessions = [_]tmux.Session{
-        testSession("active-proj", 1, false, now - 2), // 2 seconds ago = recent
-    };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "other", null, null, 0);
-
-    // Indicator ○ at col 2, row 1
-    try testing.expectEqualStrings("\u{25CB}", readGrapheme(win, 2, 1));
-    const cell = win.readCell(2, 1).?;
-    try testing.expectEqual(theme.activity, cell.style.fg);
 }
 
 // -- Selected row background --
@@ -666,10 +631,10 @@ test "draw: selected row has polar2 background within content area" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("first", 1, false, 0),
-        testSession("second", 2, false, 0),
+        testSession("first", 1),
+        testSession("second", 2),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0); // select index 1 = "second"
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0, &empty_watched); // select index 1 = "second"
 
     // Row 2 (list_start=1, index 1 → row 2): content cols 1..28 should have polar2 bg
     const selected_row: u16 = 2;
@@ -707,9 +672,9 @@ test "draw: selected session name is bold with snow2 foreground" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("dotfiles", 3, false, 0),
+        testSession("dotfiles", 3),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Name at col 4, row 1 — selected
     const cell = win.readCell(4, 1).?;
@@ -734,9 +699,9 @@ test "draw: window count is right-aligned within content area" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("dotfiles", 3, false, 0),
+        testSession("dotfiles", 3),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // content_width=28, count "3" (len=1)
     // count_col = 1 + 28 - 1 - 1 = 27
@@ -761,7 +726,7 @@ test "draw: help text renders inside border above bottom" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 
     // help_row = 12: " j/k nav  ↵ sel  / filter"
     // 'j' at col 2 in accent color
@@ -794,13 +759,13 @@ test "draw: sessions beyond visible area are not rendered" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("one", 1, false, 0),
-        testSession("two", 1, false, 0),
-        testSession("three", 1, false, 0),
-        testSession("four", 1, false, 0), // should NOT render
-        testSession("five", 1, false, 0), // should NOT render
+        testSession("one", 1),
+        testSession("two", 1),
+        testSession("three", 1),
+        testSession("four", 1), // should NOT render
+        testSession("five", 1), // should NOT render
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Rows 1,2,3 should have session names (col 4 = first char of name)
     try testing.expectEqualStrings("o", readGrapheme(win, 4, 1)); // "one"
@@ -832,9 +797,9 @@ test "draw: long session name is truncated to fit within content area" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("this-is-a-very-long-session-name", 1, false, 0),
+        testSession("this-is-a-very-long-session-name", 1),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Name starts at col 4 (left_col=1 + prefix=3)
     try testing.expectEqualStrings("t", readGrapheme(win, 4, 1));
@@ -862,7 +827,7 @@ test "draw: small window (< 3x3) does not panic" {
     };
 
     // Should return immediately without crashing
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 }
 
 test "draw: zero-size window does not panic" {
@@ -879,7 +844,7 @@ test "draw: zero-size window does not panic" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 }
 
 // -- Multiple sessions rendering --
@@ -899,11 +864,11 @@ test "draw: multiple sessions render on consecutive rows" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
-        testSession("gamma", 3, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
+        testSession("gamma", 3),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 1, "alpha", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "alpha", null, null, 0, &empty_watched);
 
     // Row 1: "alpha" — current session (selected=1, so not selected)
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
@@ -938,11 +903,11 @@ test "draw: pending kill session has red background and strikethrough" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
     };
     // selected=0, pending_kill=0 (alpha marked for deletion)
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", @as(usize, 0), null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", @as(usize, 0), null, 0, &empty_watched);
 
     // Row 1 (alpha): should have kill_bg background
     const kill_cell = win.readCell(4, 1).?;
@@ -971,11 +936,11 @@ test "draw: pending kill on non-selected row still shows red" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
     };
     // selected=1 (beta), pending_kill=0 (alpha)
-    draw(ctx.arena.allocator(), win, &sessions, 1, "", @as(usize, 0), null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", @as(usize, 0), null, 0, &empty_watched);
 
     // Row 1 (alpha): pending kill — red bg
     const kill_cell = win.readCell(4, 1).?;
@@ -1000,7 +965,7 @@ test "draw: help text shows key hints" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, null, 0, &empty_watched);
 
     // Row 12: keys in accent. 'j' at col 2
     try testing.expectEqualStrings("j", readGrapheme(win, 2, 12));
@@ -1023,10 +988,10 @@ test "draw: selected session shows path on the row below" {
     };
 
     const sessions = [_]tmux.Session{
-        testSessionWithPath("dotfiles", 3, false, 0, "/tmp/dotfiles"),
-        testSession("other", 1, false, 0),
+        testSessionWithPath("dotfiles", 3, "/tmp/dotfiles"),
+        testSession("other", 1),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Row 1: "dotfiles" name at col 4
     try testing.expectEqualStrings("d", readGrapheme(win, 4, 1));
@@ -1056,11 +1021,11 @@ test "draw: non-selected session does not show path" {
     };
 
     const sessions = [_]tmux.Session{
-        testSessionWithPath("alpha", 1, false, 0, "/tmp/alpha"),
-        testSessionWithPath("beta", 2, false, 0, "/tmp/beta"),
+        testSessionWithPath("alpha", 1, "/tmp/alpha"),
+        testSessionWithPath("beta", 2, "/tmp/beta"),
     };
     // Select beta (index 1) — alpha's path should NOT be shown
-    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0, &empty_watched);
 
     // Row 1: "alpha" — no path below
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
@@ -1085,11 +1050,11 @@ test "draw: session with empty path does not get extra row" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0), // no path
-        testSession("beta", 2, false, 0),
+        testSession("alpha", 1), // no path
+        testSession("beta", 2),
     };
     // Select alpha (index 0) — no path, so beta should be on row 2 (no shift)
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
     try testing.expectEqualStrings("b", readGrapheme(win, 4, 2));
@@ -1114,11 +1079,11 @@ test "draw: agent_waiting session shows star glyph and accent name" {
     };
 
     const sessions = [_]tmux.Session{
-        testSessionWaiting("waiting-proj", 2, false, 0),
-        testSession("normal-proj", 1, false, 0),
+        testSessionWaiting("waiting-proj", 2),
+        testSession("normal-proj", 1),
     };
     // Select normal-proj (index 1), so waiting-proj is unselected
-    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0, &empty_watched);
 
     // Row 1: ✸ indicator at col 2, accent color
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
@@ -1146,11 +1111,11 @@ test "draw: agent_waiting + selected shows star glyph and accent bold name" {
     };
 
     const sessions = [_]tmux.Session{
-        testSessionWaiting("waiting-proj", 2, false, 0),
-        testSession("normal-proj", 1, false, 0),
+        testSessionWaiting("waiting-proj", 2),
+        testSession("normal-proj", 1),
     };
     // Select waiting-proj (index 0)
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Row 1: ✸ indicator
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
@@ -1176,10 +1141,10 @@ test "draw: agent_waiting overrides current session indicator" {
     };
 
     const sessions = [_]tmux.Session{
-        testSessionWaiting("myproject", 2, true, 0),
+        testSessionWaiting("myproject", 2),
     };
     // Current AND waiting — waiting takes priority
-    draw(ctx.arena.allocator(), win, &sessions, 0, "myproject", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "myproject", null, null, 0, &empty_watched);
 
     // ✸ at col 2, accent color (waiting overrides current)
     try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
@@ -1202,11 +1167,11 @@ test "draw: non-waiting session uses normal text color" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("normal-proj", 1, false, 0),
-        testSessionWaiting("waiting-proj", 2, false, 0),
+        testSession("normal-proj", 1),
+        testSessionWaiting("waiting-proj", 2),
     };
     // Select waiting-proj (index 1), so normal-proj is unselected
-    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 0, &empty_watched);
 
     // Row 1: "normal-proj" — no waiting = default text, blank indicator
     const cell = win.readCell(4, 1).?;
@@ -1229,14 +1194,103 @@ test "draw: pending_kill overrides agent_waiting color" {
     };
 
     const sessions = [_]tmux.Session{
-        testSessionWaiting("waiting-proj", 2, false, 0),
+        testSessionWaiting("waiting-proj", 2),
     };
     // Selected + pending kill + waiting — kill should override
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", @as(usize, 0), null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", @as(usize, 0), null, 0, &empty_watched);
 
     const cell = win.readCell(4, 1).?;
     try testing.expectEqual(theme.kill_fg, cell.style.fg);
     try testing.expectEqual(theme.kill_bg, cell.style.bg);
+}
+
+// -- Watch indicator --
+
+test "draw: watched session with agent_waiting shows bright star" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        .{ .name = "watched-proj", .windows = 2, .path = "", .agent_waiting = true },
+    };
+    var w: std.StringHashMapUnmanaged(void) = .{};
+    defer w.deinit(testing.allocator);
+    try w.put(testing.allocator, "watched-proj", {});
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &w);
+
+    // Row 1: ✸ indicator at col 2, accent color (bright)
+    try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
+    const glyph_cell = win.readCell(2, 1).?;
+    try testing.expectEqual(theme.accent, glyph_cell.style.fg);
+
+    // Name should also be accent color
+    const name_cell = win.readCell(4, 1).?;
+    try testing.expectEqual(theme.accent, name_cell.style.fg);
+}
+
+test "draw: watched session without agent_waiting shows dim star" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSession("watched-proj", 2),
+    };
+    var w: std.StringHashMapUnmanaged(void) = .{};
+    defer w.deinit(testing.allocator);
+    try w.put(testing.allocator, "watched-proj", {});
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &w);
+
+    // Row 1: ✸ indicator at col 2, default text color (watched but busy)
+    try testing.expectEqualStrings("\u{2738}", readGrapheme(win, 2, 1));
+    const glyph_cell = win.readCell(2, 1).?;
+    try testing.expectEqual(theme.text, glyph_cell.style.fg);
+
+    // Name should be normal text (not accent — agent isn't waiting)
+    const name_cell = win.readCell(4, 1).?;
+    try testing.expectEqual(theme.text_bright, name_cell.style.fg); // selected = bright
+}
+
+test "draw: unwatched session shows no star indicator" {
+    var ctx = try createTestWindow(30, 15);
+    defer ctx.screen.deinit(testing.allocator);
+    defer ctx.arena.deinit();
+    const win: Window = .{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = ctx.screen.width,
+        .height = ctx.screen.height,
+        .screen = &ctx.screen,
+    };
+
+    const sessions = [_]tmux.Session{
+        testSession("unwatched", 1),
+    };
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
+
+    // Row 1: blank indicator at col 2
+    try testing.expectEqualStrings(" ", readGrapheme(win, 2, 1));
 }
 
 test "draw: filter mode shows filter input on bottom row" {
@@ -1253,7 +1307,7 @@ test "draw: filter mode shows filter input on bottom row" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "dot", 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "dot", 0, &empty_watched);
 
     // Row 13 (help_row+1): " / dot" — '/' at col 2, 'd' at col 4
     try testing.expectEqualStrings("/", readGrapheme(win, 2, 13));
@@ -1284,7 +1338,7 @@ test "draw: filter mode shows cancel hint on help row" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "", 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "", 0, &empty_watched);
 
     // Row 12 (help_row): " esc cancel  enter select" — 'e' at col 2
     try testing.expectEqualStrings("e", readGrapheme(win, 2, 12));
@@ -1304,7 +1358,7 @@ test "draw: filter mode with empty string shows cursor at start" {
         .screen = &ctx.screen,
     };
 
-    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "", 0);
+    draw(ctx.arena.allocator(), win, &.{}, 0, "", null, "", 0, &empty_watched);
 
     // " / " then cursor at col 4 (content_left=1 + 3 + 0)
     try testing.expectEqualStrings("/", readGrapheme(win, 2, 13));
@@ -1330,14 +1384,14 @@ test "draw: scroll_offset skips sessions above the view" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
-        testSession("gamma", 3, false, 0),
-        testSession("delta", 4, false, 0),
-        testSession("epsilon", 5, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
+        testSession("gamma", 3),
+        testSession("delta", 4),
+        testSession("epsilon", 5),
     };
     // scroll_offset=2: skip alpha and beta, show gamma onward
-    draw(ctx.arena.allocator(), win, &sessions, 2, "", null, null, 2);
+    draw(ctx.arena.allocator(), win, &sessions, 2, "", null, null, 2, &empty_watched);
 
     // Row 1: gamma (first visible session)
     try testing.expectEqualStrings("g", readGrapheme(win, 4, 1));
@@ -1358,13 +1412,13 @@ test "draw: scroll up indicator shown when offset > 0" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
-        testSession("gamma", 3, false, 0),
-        testSession("delta", 4, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
+        testSession("gamma", 3),
+        testSession("delta", 4),
     };
     // scroll_offset=1: alpha is above
-    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 1);
+    draw(ctx.arena.allocator(), win, &sessions, 1, "", null, null, 1, &empty_watched);
 
     // Row 1: ▲ indicator
     try testing.expectEqualStrings("\xE2\x96\xB2", readGrapheme(win, 2, 1));
@@ -1387,14 +1441,14 @@ test "draw: scroll down indicator shown when sessions below" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
-        testSession("gamma", 3, false, 0),
-        testSession("delta", 4, false, 0),
-        testSession("epsilon", 5, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
+        testSession("gamma", 3),
+        testSession("delta", 4),
+        testSession("epsilon", 5),
     };
     // scroll_offset=0, more sessions than fit
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Should show ▼ at some row below the visible sessions
     // With max_visible=3 and 5 sessions, we expect ▼ indicator
@@ -1418,10 +1472,10 @@ test "draw: no scroll indicators when all sessions fit" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("beta", 2, false, 0),
+        testSession("alpha", 1),
+        testSession("beta", 2),
     };
-    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0);
+    draw(ctx.arena.allocator(), win, &sessions, 0, "", null, null, 0, &empty_watched);
 
     // Row 1: alpha (no ▲)
     try testing.expectEqualStrings("a", readGrapheme(win, 4, 1));
@@ -1584,18 +1638,18 @@ test "integration: adjustScroll then draw shows selected session visible" {
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("bravo", 1, false, 0),
-        testSession("charlie", 1, false, 0),
-        testSession("delta", 1, false, 0),
-        testSession("echo", 1, false, 0),
-        testSession("foxtrot", 1, false, 0),
+        testSession("alpha", 1),
+        testSession("bravo", 1),
+        testSession("charlie", 1),
+        testSession("delta", 1),
+        testSession("echo", 1),
+        testSession("foxtrot", 1),
     };
     const selected: usize = 4;
     var offset: usize = 0;
     adjustScroll(&offset, selected, sessions.len, 7, false);
 
-    draw(ctx.arena.allocator(), win, &sessions, selected, "", null, null, offset);
+    draw(ctx.arena.allocator(), win, &sessions, selected, "", null, null, offset, &empty_watched);
 
     // The selected session "echo" must appear somewhere in the rendered rows.
     // Scan rows 1..4 (content rows) for 'e' at col 4.
@@ -1630,18 +1684,18 @@ test "integration: adjustScroll with path then draw shows both session and path"
     };
 
     const sessions = [_]tmux.Session{
-        testSession("alpha", 1, false, 0),
-        testSession("bravo", 1, false, 0),
-        testSession("charlie", 1, false, 0),
-        testSession("delta", 1, false, 0),
-        testSessionWithPath("echo", 1, false, 0, "/tmp/echo"),
-        testSession("foxtrot", 1, false, 0),
+        testSession("alpha", 1),
+        testSession("bravo", 1),
+        testSession("charlie", 1),
+        testSession("delta", 1),
+        testSessionWithPath("echo", 1, "/tmp/echo"),
+        testSession("foxtrot", 1),
     };
     const selected: usize = 4;
     var offset: usize = 0;
     adjustScroll(&offset, selected, sessions.len, 7, true);
 
-    draw(ctx.arena.allocator(), win, &sessions, selected, "", null, null, offset);
+    draw(ctx.arena.allocator(), win, &sessions, selected, "", null, null, offset, &empty_watched);
 
     // "echo" must be visible and bold
     var echo_row: ?u16 = null;
