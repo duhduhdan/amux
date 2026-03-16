@@ -7,8 +7,15 @@
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$CURRENT_DIR/zig-out/bin/amux"
 
-# Auto-build if binary doesn't exist
+# Auto-build if binary is missing or source is newer than the binary
+NEEDS_BUILD=false
 if [ ! -f "$BIN" ]; then
+    NEEDS_BUILD=true
+elif [ -n "$(find "$CURRENT_DIR/src" -name '*.zig' -newer "$BIN" 2>/dev/null | head -1)" ]; then
+    NEEDS_BUILD=true
+fi
+
+if [ "$NEEDS_BUILD" = true ]; then
     if command -v zig &>/dev/null; then
         tmux display-message "amux: building..."
         (cd "$CURRENT_DIR" && zig build --release=fast 2>/dev/null)
