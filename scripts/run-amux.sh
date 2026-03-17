@@ -18,6 +18,11 @@ fi
 # Ensure log directory exists for stderr capture
 mkdir -p "$AMUX_LOG_DIR" 2>/dev/null
 
+# Log binary identity for debugging
+BIN_SIZE=$(wc -c < "$AMUX_BIN" 2>/dev/null | tr -d ' ')
+BIN_DATE=$(date -r "$AMUX_BIN" +%Y-%m-%dT%H:%M:%S 2>/dev/null || stat -c %y "$AMUX_BIN" 2>/dev/null | cut -d. -f1)
+amux_log "binary path=$AMUX_BIN size=$BIN_SIZE date=$BIN_DATE"
+
 # Run the sidebar binary in a loop.
 # Exit code 0 = normal quit (q/Esc), exit code 2 = create session (n).
 while true; do
