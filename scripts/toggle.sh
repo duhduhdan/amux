@@ -4,8 +4,8 @@
 # Called by the tmux keybinding, the client-session-changed hook,
 # and the after-new-window hook.
 #
-# Sidebar panes are identified by their title ("amux") set via select-pane -T.
-# Layout is stored per-window using window-level tmux options (-w).
+# Sidebar panes are tracked per-window via @amux-pane-id (window option).
+# Layout is stored per-window via @amux-saved-layout (window option).
 # Global @amux-enabled controls whether hooks are active.
 #
 
@@ -29,16 +29,14 @@ else
     SPLIT_FLAGS="-hbfPF"
 fi
 
-# Find the amux sidebar pane in a given target (defaults to current window).
-# Returns the pane ID or empty string if not found.
+# Find the amux sidebar pane in the current window.
+# Reads the per-window @amux-pane-id option and verifies the pane still exists.
+# Returns the pane ID or empty string.
 find_amux_pane() {
-    local target="${1:-}"
-    if [ -n "$target" ]; then
-        tmux list-panes -t "$target" -F '#{pane_id} #{pane_title}' 2>/dev/null \
-            | awk '$2 == "amux" { print $1; exit }'
-    else
-        tmux list-panes -F '#{pane_id} #{pane_title}' 2>/dev/null \
-            | awk '$2 == "amux" { print $1; exit }'
+    local pane_id
+    pane_id=$(tmux show-option -wqv @amux-pane-id)
+    if [ -n "$pane_id" ] && tmux list-panes -F '#{pane_id}' 2>/dev/null | grep -q "^${pane_id}$"; then
+        echo "$pane_id"
     fi
 }
 
@@ -51,9 +49,23 @@ create_sidebar() {
 
     local pane_id
     pane_id=$(tmux split-window $SPLIT_FLAGS '#{pane_id}' -l "$AMUX_WIDTH" "$WRAPPER $AMUX_BIN")
-    tmux select-pane -t "$pane_id" -T "amux"
+    # Track this pane in a per-window option (atomic, no race)
+    tmux set-option -w @amux-pane-id "$pane_id"
     # Refocus the original pane (the split steals focus)
     tmux last-pane
+}
+
+# Check if any window in any session has an amux sidebar.
+any_amux_panes() {
+    # Iterate all windows and check their @amux-pane-id option
+    tmux list-windows -a -F '#{window_id}' 2>/dev/null | while read -r win_id; do
+        local pid
+        pid=$(tmux show-option -wqv -t "$win_id" @amux-pane-id 2>/dev/null)
+        if [ -n "$pid" ] && tmux list-panes -t "$win_id" -F '#{pane_id}' 2>/dev/null | grep -q "^${pid}$"; then
+            echo "found"
+            return
+        fi
+    done
 }
 
 # --- Recreate mode: called by hook on session switch ---
@@ -63,16 +75,17 @@ if [ "$1" = "recreate" ]; then
         exit 0
     fi
 
-    # Kill ALL amux panes across all windows in all sessions
-    # (the old session's windows may have sidebars that need cleaning up)
-    for pane in $(tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
-                  | awk '$2 == "amux" { print $1 }'); do
-        # Restore that pane's window layout before killing it
-        local_window=$(tmux display-message -t "$pane" -p '#{window_id}' 2>/dev/null)
-        local_layout=$(tmux show-option -wqv -t "$pane" @amux-saved-layout 2>/dev/null)
-        tmux kill-pane -t "$pane" 2>/dev/null
-        if [ -n "$local_window" ] && [ -n "$local_layout" ]; then
-            tmux select-layout -t "$local_window" "$local_layout" 2>/dev/null
+    # Kill amux panes in all windows by checking per-window @amux-pane-id
+    tmux list-windows -a -F '#{window_id}' 2>/dev/null | while read -r win_id; do
+        pid=$(tmux show-option -wqv -t "$win_id" @amux-pane-id 2>/dev/null)
+        if [ -n "$pid" ]; then
+            local_layout=$(tmux show-option -wqv -t "$win_id" @amux-saved-layout 2>/dev/null)
+            tmux kill-pane -t "$pid" 2>/dev/null
+            if [ -n "$local_layout" ]; then
+                tmux select-layout -t "$win_id" "$local_layout" 2>/dev/null
+            fi
+            tmux set-option -wu -t "$win_id" @amux-pane-id 2>/dev/null
+            tmux set-option -wu -t "$win_id" @amux-saved-layout 2>/dev/null
         fi
     done
 
@@ -107,11 +120,11 @@ if [ -n "$EXISTING" ]; then
     if [ -n "$SAVED_LAYOUT" ]; then
         tmux select-layout "$SAVED_LAYOUT"
     fi
+    tmux set-option -wu @amux-pane-id
     tmux set-option -wu @amux-saved-layout
 
     # Check if any amux panes remain anywhere
-    REMAINING=$(tmux list-panes -a -F '#{pane_title}' 2>/dev/null | grep -c '^amux$')
-    if [ "$REMAINING" -eq 0 ]; then
+    if [ -z "$(any_amux_panes)" ]; then
         # Last sidebar closed — disable globally
         tmux set-option -g @amux-enabled "off"
         tmux set-hook -gu client-session-changed
