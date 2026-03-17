@@ -59,19 +59,29 @@ fi
 
 # Restore this window's layout
 SAVED_LAYOUT=$(tmux show-option -wqv @amux-saved-layout)
+PANE_ID=$(tmux display-message -p '#{pane_id}')
+
+# Clear per-window tracking options
+tmux set-option -wu @amux-pane-id
 tmux set-option -wu @amux-saved-layout
 
-# Kill this pane and restore layout via a background tmux command.
-# We use run-shell so the select-layout happens after the pane is gone.
-PANE_ID=$(tmux display-message -p '#{pane_id}')
-tmux run-shell -b "tmux kill-pane -t $PANE_ID 2>/dev/null; tmux select-layout '$SAVED_LAYOUT' 2>/dev/null"
+# Check if any other windows still have amux sidebars
+HAS_REMAINING=false
+for win_id in $(tmux list-windows -a -F '#{window_id}' 2>/dev/null); do
+    pid=$(tmux show-option -wqv -t "$win_id" @amux-pane-id 2>/dev/null)
+    if [ -n "$pid" ] && tmux list-panes -t "$win_id" -F '#{pane_id}' 2>/dev/null | grep -q "^${pid}$"; then
+        HAS_REMAINING=true
+        break
+    fi
+done
 
-# Check if any amux panes remain (aside from this one that's about to die)
-REMAINING=$(tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
-    | awk -v self="$PANE_ID" '$2 == "amux" && $1 != self' | wc -l)
-if [ "$REMAINING" -eq 0 ]; then
+if [ "$HAS_REMAINING" = false ]; then
     # Last sidebar — disable globally
     tmux set-option -g @amux-enabled "off"
     tmux set-hook -gu client-session-changed
     tmux set-hook -gu after-new-window
 fi
+
+# Kill this pane and restore layout via a background tmux command.
+# We use run-shell so the select-layout happens after the pane is gone.
+tmux run-shell -b "tmux kill-pane -t $PANE_ID 2>/dev/null; tmux select-layout '$SAVED_LAYOUT' 2>/dev/null"
