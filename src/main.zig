@@ -147,6 +147,7 @@ pub fn main() !void {
     // Init logger
     log.init();
     defer log.deinit();
+    log.info("init log", .{});
 
     // Arena for per-frame session data (reset each frame)
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -156,24 +157,30 @@ pub fn main() !void {
     var tty_buf: [4096]u8 = undefined;
     var tty = try vaxis.Tty.init(&tty_buf);
     defer tty.deinit();
+    log.info("init tty", .{});
 
     // Init Vaxis
     var vx = try vaxis.init(allocator, .{});
     defer vx.deinit(allocator, tty.writer());
+    log.info("init vaxis", .{});
 
     // Init event loop
     var loop: vaxis.Loop(Event) = .{ .tty = &tty, .vaxis = &vx };
     try loop.init();
     try loop.start();
     defer loop.stop();
+    log.info("init event_loop", .{});
 
     // Enter alt screen, query terminal capabilities
     try vx.enterAltScreen(tty.writer());
+    log.info("init alt_screen", .{});
     try vx.queryTerminal(tty.writer(), 1 * std.time.ns_per_s);
+    log.info("init query_terminal", .{});
 
     // Auto-refresh timer thread
     var quit_flag = std.atomic.Value(bool).init(false);
     const refresh_thread = try std.Thread.spawn(.{}, refreshTimer, .{ &loop, &quit_flag });
+    log.info("init timer_thread", .{});
 
     // State — initialize selection to the current session
     var selected: usize = 0;
