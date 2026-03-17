@@ -9,18 +9,17 @@ Written in Zig with [libvaxis](https://github.com/rockorager/libvaxis). Installa
 │ ●  dotfiles          3│
 │    ~/dev/dotfiles     │
 │ ✸  opencode          2│
-│    website           4│
-│ ○  api-server        2│
+│ ✸  api-server        2│
 │    docs              1│
 │                       │
 │ j/k nav  ↵ sel  / flt │
-│ n new  d kill  q quit │
+│ w watch  n new  d kill│
 └───────────────────────┘
 ```
 
-- `●` current session
-- `✸` agent waiting for input (accent color, requires [integration](#agent-integrations))
-- `○` another client attached
+- `●` current session (green)
+- `✸` agent waiting for input (accent color — session is watched and agent is idle)
+- `✸` watched session (default text color — session is watched, agent is busy)
 
 ## Requirements
 
@@ -85,13 +84,14 @@ tmux source-file ~/.tmux.conf
 | `prefix + S`       | Toggle sidebar on/off           |
 | `j` / `k`          | Move selection down / up        |
 | `Enter` / `Right`  | Switch to selected session      |
+| `w`                | Toggle watch for agent signals  |
 | `d`                | Kill session (press twice)      |
 | `n`                | Create new session (via fzf)    |
 | `/`                | Filter sessions by name         |
 | `Esc`              | Cancel filter / close sidebar   |
 | `q`                | Close sidebar                   |
 
-The sidebar follows you across session switches via a `client-session-changed` hook. The session list auto-refreshes every 2 seconds.
+The sidebar follows you across session switches and persists in new windows within the same session. The session list auto-refreshes every 2 seconds.
 
 ## Configuration
 
@@ -110,7 +110,7 @@ set-option -g @amux-position "left"
 
 ## Agent Integrations
 
-amux can show when an AI agent is idle and waiting for your input. A `✸` indicator appears in accent color next to the session name when the agent is done.
+amux can show when an AI agent is idle and waiting for your input. Press `w` on a session to watch it — a dim `✸` appears to show it's being watched. When the agent finishes, the `✸` turns bright (accent color) so you know it's your turn.
 
 This works via a simple file-based signal protocol. Integrations for Claude Code and OpenCode are included. Any tool that writes `$XDG_RUNTIME_DIR/amux/<session>.waiting` files will work.
 
@@ -192,14 +192,14 @@ amux checks this directory every 2 seconds (on each auto-refresh). To add suppor
 2. **amux binary** uses libvaxis to render a TUI, querying `tmux list-sessions` on every event and every 2 seconds via a timer thread.
 3. **Session switching** runs `tmux switch-client -t <name>`. A `client-session-changed` hook re-creates the sidebar pane in the new session.
 4. **New session** (`n` key) exits the binary with code 2. The wrapper script (`scripts/run-amux.sh`) catches this and runs `tmux-sessionizer` for fzf-based directory selection, then restarts.
-5. **State** is stored in tmux global options (`@amux-enabled`, `@amux-pane-id`, `@amux-saved-layout`).
+5. **State** is stored in tmux options: `@amux-enabled` (global), `@amux-pane-id` and `@amux-saved-layout` (per-window).
 
 ## Development
 
 ```sh
 zig build              # debug build
 zig build --release=fast  # release build
-zig build test         # run tests (88 tests)
+zig build test         # run tests (~90 tests)
 zig build run          # run directly
 ```
 
