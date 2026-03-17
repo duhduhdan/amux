@@ -10,6 +10,7 @@
 #
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$CURRENT_DIR/log.sh"
 AMUX_BIN="$CURRENT_DIR/../zig-out/bin/amux"
 WRAPPER="$CURRENT_DIR/run-amux.sh"
 
@@ -91,6 +92,7 @@ if [ "$1" = "recreate" ]; then
 
     # Create sidebar in the current window of the new session
     create_sidebar
+    amux_log "recreate session=$(tmux display-message -p '#S') window=$(tmux display-message -p '#{window_id}')"
     exit 0
 fi
 
@@ -105,6 +107,7 @@ if [ "$1" = "new-window" ]; then
     EXISTING=$(find_amux_pane)
     if [ -z "$EXISTING" ]; then
         create_sidebar
+        amux_log "new-window window=$(tmux display-message -p '#{window_id}')"
     fi
     exit 0
 fi
@@ -114,6 +117,7 @@ EXISTING=$(find_amux_pane)
 
 if [ -n "$EXISTING" ]; then
     # Sidebar exists in current window — kill it and restore layout
+    amux_log "toggle off window=$(tmux display-message -p '#{window_id}') pane=$EXISTING"
     SAVED_LAYOUT=$(tmux show-option -wqv @amux-saved-layout)
     tmux kill-pane -t "$EXISTING"
 
@@ -133,11 +137,13 @@ if [ -n "$EXISTING" ]; then
 else
     # Sidebar not visible in current window — create it
     if [ ! -f "$AMUX_BIN" ]; then
+        amux_log_err "binary not found at $AMUX_BIN"
         tmux display-message "amux: binary not found. Run 'zig build --release=fast' in the plugin directory."
         exit 1
     fi
 
     create_sidebar
+    amux_log "toggle on window=$(tmux display-message -p '#{window_id}')"
 
     # Enable globally if not already
     ENABLED=$(tmux show-option -gqv @amux-enabled)

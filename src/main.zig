@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const tmux = @import("tmux.zig");
 const render = @import("render.zig");
 const input = @import("input.zig");
+const log = @import("log.zig");
 
 /// Auto-reset terminal on panic
 pub const panic = vaxis.Panic.call;
@@ -143,6 +144,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // Init logger
+    log.init();
+    defer log.deinit();
+
     // Arena for per-frame session data (reset each frame)
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -194,6 +199,7 @@ pub fn main() !void {
         const current = tmux.getCurrentSession(frame_alloc) catch "";
 
         selected = findCurrentIndex(sessions, current);
+        log.info("started sessions={d} current={s}", .{ sessions.len, current });
 
         const win = vx.window();
         win.clear();
@@ -333,12 +339,15 @@ pub fn main() !void {
                                 if (sessions.len > 0 and selected < sessions.len) {
                                     const name = sessions[selected].name;
                                     if (watched.fetchRemove(name)) |kv| {
+                                        log.info("watch off session={s}", .{name});
                                         allocator.free(kv.key);
                                     } else {
                                         const duped = allocator.dupe(u8, name) catch continue;
                                         watched.put(allocator, duped, {}) catch {
                                             allocator.free(duped);
+                                            continue;
                                         };
+                                        log.info("watch on session={s}", .{name});
                                     }
                                 }
                             },
@@ -416,6 +425,8 @@ pub fn main() !void {
     // Clean shutdown: stop the timer thread
     quit_flag.store(true, .release);
     refresh_thread.join();
+
+    log.info("shutdown exit_code={d}", .{exit_code});
 
     // Exit with appropriate code for the wrapper script
     if (exit_code != EXIT_NORMAL) {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 
 pub const Session = struct {
     name: []const u8,
@@ -64,8 +65,14 @@ pub fn switchSession(name: []const u8) !void {
     var child = std.process.Child.init(&argv, std.heap.page_allocator);
     child.stderr_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
-    try child.spawn();
-    _ = try child.wait();
+    child.spawn() catch |e| {
+        log.err("switchSession spawn failed target={s} err={s}", .{ name, @errorName(e) });
+        return e;
+    };
+    _ = child.wait() catch |e| {
+        log.err("switchSession wait failed target={s} err={s}", .{ name, @errorName(e) });
+        return e;
+    };
 }
 
 /// Switch to the last (most recently used) tmux session.
@@ -89,15 +96,33 @@ pub fn killSession(name: []const u8) !void {
     var child = std.process.Child.init(&argv, std.heap.page_allocator);
     child.stderr_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
-    try child.spawn();
-    const term = try child.wait();
+    child.spawn() catch |e| {
+        log.err("killSession spawn failed target={s} err={s}", .{ name, @errorName(e) });
+        return e;
+    };
+    const term = child.wait() catch |e| {
+        log.err("killSession wait failed target={s} err={s}", .{ name, @errorName(e) });
+        return e;
+    };
     switch (term) {
         .Exited => |code| {
-            if (code != 0) return error.ProcessFailed;
+            if (code != 0) {
+                log.err("killSession failed target={s} exit_code={d}", .{ name, code });
+                return error.ProcessFailed;
+            }
         },
-        .Signal => return error.ProcessSignaled,
-        .Stopped => return error.ProcessStopped,
-        .Unknown => return error.ProcessUnknown,
+        .Signal => {
+            log.err("killSession signaled target={s}", .{name});
+            return error.ProcessSignaled;
+        },
+        .Stopped => {
+            log.err("killSession stopped target={s}", .{name});
+            return error.ProcessStopped;
+        },
+        .Unknown => {
+            log.err("killSession unknown target={s}", .{name});
+            return error.ProcessUnknown;
+        },
     }
 }
 
@@ -180,11 +205,23 @@ fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) ![]const u
 
     switch (term) {
         .Exited => |code| {
-            if (code != 0) return error.ProcessFailed;
+            if (code != 0) {
+                log.err("command failed exit_code={d} cmd={s}", .{ code, argv[0] });
+                return error.ProcessFailed;
+            }
         },
-        .Signal => return error.ProcessSignaled,
-        .Stopped => return error.ProcessStopped,
-        .Unknown => return error.ProcessUnknown,
+        .Signal => {
+            log.err("command signaled cmd={s}", .{argv[0]});
+            return error.ProcessSignaled;
+        },
+        .Stopped => {
+            log.err("command stopped cmd={s}", .{argv[0]});
+            return error.ProcessStopped;
+        },
+        .Unknown => {
+            log.err("command unknown termination cmd={s}", .{argv[0]});
+            return error.ProcessUnknown;
+        },
     }
 
     return stdout_buf.items;

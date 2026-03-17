@@ -7,6 +7,7 @@
 
 AMUX_BIN="$1"
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$CURRENT_DIR/log.sh"
 
 # Path to tmux-sessionizer (from dotfiles)
 SESSIONIZER="$HOME/scripts/tmux-sessionizer"
@@ -19,6 +20,7 @@ fi
 while true; do
     "$AMUX_BIN"
     EXIT_CODE=$?
+    amux_log "binary exited code=$EXIT_CODE"
 
     if [ "$EXIT_CODE" -eq 2 ] && [ -x "$SESSIONIZER" ]; then
         # User pressed n — run sessionizer (fzf) in this pane.
@@ -77,9 +79,12 @@ done
 
 if [ "$HAS_REMAINING" = false ]; then
     # Last sidebar — disable globally
+    amux_log "cleanup last_sidebar pane=$PANE_ID disabling_globally"
     tmux set-option -g @amux-enabled "off"
     tmux set-hook -gu client-session-changed
     tmux set-hook -gu after-new-window
+else
+    amux_log "cleanup pane=$PANE_ID sidebars_remaining"
 fi
 
 # Kill this pane and restore layout via a background tmux command.
