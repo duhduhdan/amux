@@ -178,7 +178,7 @@ fn getSignalDir(allocator: std.mem.Allocator) ?[]const u8 {
         return std.fmt.allocPrint(allocator, "{s}/amux", .{xrd}) catch null;
     }
     // Fallback: /tmp/amux-<uid>/
-    const uid = std.os.linux.getuid();
+    const uid = std.posix.getuid();
     return std.fmt.allocPrint(allocator, "/tmp/amux-{d}", .{uid}) catch null;
 }
 
