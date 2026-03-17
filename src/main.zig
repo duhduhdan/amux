@@ -326,15 +326,16 @@ pub fn main() !void {
                                 // Toggle watch on the selected session.
                                 // Session names are arena-allocated, so dupe into the
                                 // GPA-backed allocator for the watched set's lifetime.
-                                _ = arena.reset(.retain_capacity);
-                                const frame_alloc2 = arena.allocator();
-                                const sessions = tmux.listSessions(frame_alloc2) catch &.{};
+                                // NOTE: do NOT reset the arena here — the session data
+                                // must remain valid for the dupe below. The arena is
+                                // reset at the start of each render frame anyway.
+                                const sessions = tmux.listSessions(arena.allocator()) catch &.{};
                                 if (sessions.len > 0 and selected < sessions.len) {
                                     const name = sessions[selected].name;
                                     if (watched.fetchRemove(name)) |kv| {
                                         allocator.free(kv.key);
                                     } else {
-                                        const duped = allocator.dupe(u8, name) catch break;
+                                        const duped = allocator.dupe(u8, name) catch continue;
                                         watched.put(allocator, duped, {}) catch {
                                             allocator.free(duped);
                                         };
