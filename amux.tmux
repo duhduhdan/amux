@@ -17,29 +17,25 @@ fi
 
 if [ "$NEEDS_BUILD" = true ]; then
     if command -v zig &>/dev/null; then
-        tmux display-message "amux: building..."
         (cd "$CURRENT_DIR" && zig build --release=fast 2>/dev/null)
-        if [ $? -eq 0 ]; then
-            tmux display-message "amux: build complete"
-        else
-            tmux display-message "amux: build failed — run 'zig build' manually"
-        fi
-    else
-        tmux display-message "amux: zig not found — install zig 0.15+"
     fi
 fi
 
-# Register toggle keybinding
-AMUX_KEY=$(tmux show-option -gqv @amux-key)
-AMUX_KEY=${AMUX_KEY:-S}
+# Only register keybinding and hooks when tmux server is ready.
+# On fresh boot /tmp/tmux-UID/ is cleared so the server socket doesn't exist yet.
+# TPM sources this file on every tmux start, including before the socket exists.
+if tmux has-session 2>/dev/null; then
+    AMUX_KEY=$(tmux show-option -gqv @amux-key)
+    AMUX_KEY=${AMUX_KEY:-S}
 
-tmux bind-key "$AMUX_KEY" run-shell "$CURRENT_DIR/scripts/toggle.sh"
+    tmux bind-key "$AMUX_KEY" run-shell "$CURRENT_DIR/scripts/toggle.sh"
 
-# Restore sidebar if it was enabled before tmux restart (works with tmux-resurrect)
-ENABLED=$(tmux show-option -gqv @amux-enabled)
-if [ "$ENABLED" = "on" ] && [ -f "$BIN" ]; then
-    # Re-register hooks (lost on tmux restart)
-    tmux set-hook -g client-session-changed "run-shell '$CURRENT_DIR/scripts/toggle.sh recreate'"
-    tmux set-hook -g after-new-window "run-shell '$CURRENT_DIR/scripts/toggle.sh new-window'"
-    "$CURRENT_DIR/scripts/toggle.sh"
+    # Restore sidebar if it was enabled before tmux restart (works with tmux-resurrect)
+    ENABLED=$(tmux show-option -gqv @amux-enabled)
+    if [ "$ENABLED" = "on" ] && [ -f "$BIN" ]; then
+        # Re-register hooks (lost on tmux restart)
+        tmux set-hook -g client-session-changed "run-shell '$CURRENT_DIR/scripts/toggle.sh recreate'"
+        tmux set-hook -g after-new-window "run-shell '$CURRENT_DIR/scripts/toggle.sh new-window'"
+        "$CURRENT_DIR/scripts/toggle.sh"
+    fi
 fi

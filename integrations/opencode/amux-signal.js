@@ -15,7 +15,12 @@ const signalDir = `${runtimeDir}/amux`;
 
 function getSession() {
   try {
-    return execSync("tmux display-message -p '#S'", {
+    execSync("tmux has-session 2>/dev/null", { timeout: 2000 });
+  } catch {
+    return null;
+  }
+  try {
+    return execSync("tmux display-message -p '#S' 2>/dev/null", {
       encoding: "utf-8",
       timeout: 2000,
     }).trim();
